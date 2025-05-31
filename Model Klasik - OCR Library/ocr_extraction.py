@@ -11,11 +11,11 @@ from PIL import Image
 pdf_path = "SPDP Nomor SPDP_43_V_Res.1.2._2025_Reskrim-777a2ead-1e6f-4feb-a979-9563a6cc748a.pdf"
 poppler_path = r"C:\poppler-24.08.0\Library\bin"
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-bahasa = 'ind'  # Ganti ke 'eng' jika 'ind' belum tersedia
+bahasa = 'ind'
 
 # ======== BUAT FOLDER UNTUK GAMBAR ========
 output_folder = "halaman_gambar"
-os.makedirs(output_folder, exist_ok=True)  # Buat folder jika belum ada
+os.makedirs(output_folder, exist_ok=True)
 
 # ======== FUNGSI PREPROCESSING ========
 def preprocess_image(pil_img, enable=False):
@@ -37,30 +37,21 @@ all_text = ""
 json_output = []
 
 for i, img in enumerate(images):
-    # Simpan gambar asli ke folder khusus
     image_path = os.path.join(output_folder, f"halaman_{i+1}.png")
     img.save(image_path, "PNG")
 
-    # Pra-proses gambar jika perlu
     processed = preprocess_image(img)
-
-    # Jalankan OCR
     text = pytesseract.image_to_string(processed, lang=bahasa)
-
-    # Gabungkan hasil teks
     all_text += f"\n=== Halaman {i+1} ===\n{text.strip()}\n"
-
-    # Simpan per halaman ke JSON
     json_output.append({
         "halaman": i + 1,
         "isi": text.strip()
     })
 
-# Simpan hasil .txt
+# Simpan hasil OCR
 with open("hasil_ocr.txt", "w", encoding="utf-8") as f_txt:
     f_txt.write(all_text)
 
-# Simpan hasil .json
 with open("hasil_ocr.json", "w", encoding="utf-8") as f_json:
     json.dump(json_output, f_json, ensure_ascii=False, indent=2)
 
@@ -68,37 +59,52 @@ with open("hasil_ocr.json", "w", encoding="utf-8") as f_json:
 def ekstrak_entitas(teks):
     hasil = {}
 
-    match_nomor = re.search(r"Nomor\s*[:\-]?\s*(SPDP[^\n]*)", teks, re.IGNORECASE)
-    if match_nomor:
-        hasil["nomor_spdp"] = match_nomor.group(1).strip()
+    # Tgl SPDP
+    match_tgl = re.search(r"(?:TANGGAL|TGL)[^\w]?\s*(\d{1,2}\s*(?:Mei|Januari|Februari|Maret|April|Juni|Juli|Agustus|September|Oktober|November|Desember)\s*\d{4})", teks, re.IGNORECASE)
+    hasil["Tgl SPDP"] = match_tgl.group(1).strip() if match_tgl else "Tidak ditemukan"
 
-    match_tgl = re.search(r"(?:tanggal|tgl)\s*[:\-]?\s*(\d{1,2}\s*[a-zA-Z]+\s*\d{4})", teks, re.IGNORECASE)
-    if match_tgl:
-        hasil["tanggal"] = match_tgl.group(1).strip()
+    # No SPDP (gunakan pola SPDP/.../.../....)
+    match_no = re.search(r"(nomor|SPDP[\/\.\-\w]*)", teks)
+    hasil["No SPDP"] = match_no.group(1).strip() if match_no else "Tidak ditemukan"
 
-    match_tersangka = re.search(r"tersangka\s*[:\-]?\s*([A-Z][^\n,]*)", teks, re.IGNORECASE)
-    if match_tersangka:
-        hasil["tersangka"] = match_tersangka.group(1).strip()
+    # Profile Pelaku (misalnya setelah kata "atas nama", "nama tersangka", "atas diri")
+    match_pelaku = re.search(r"(?:atas nama|tersangka|atas diri|terlapor|nama)\s*[:\-]?\s*([A-Z][^\n,]*)", teks, re.IGNORECASE)
+    hasil["Profile Pelaku"] = match_pelaku.group(1).strip() if match_pelaku else "Tidak ditemukan"
 
-    match_pasal = re.search(r"pasal\s*[:\-]?\s*(\d+.*?KUHP[^.\n]*)", teks, re.IGNORECASE)
-    if match_pasal:
-        hasil["pasal"] = match_pasal.group(1).strip()
+    # Pasal yg dilanggar
+    match_pasal = re.search(r"(?:melanggar|Pasal)\s*(\d+\s*(?:ayat\s*\(\d+\))?\s*KUHP(?:idana)?)", teks, re.IGNORECASE)
+    hasil["Pasal yg dilanggar"] = match_pasal.group(1).strip() if match_pasal else "Tidak ditemukan"
 
-    match_penyidik = re.search(r"penyidik\s*[:\-]?\s*([A-Z][^\n]*)", teks, re.IGNORECASE)
-    if match_penyidik:
-        hasil["penyidik"] = match_penyidik.group(1).strip()
+    # Jenis Perkara (biasanya muncul dalam kalimat pembuka: “dugaan tindak pidana pencurian”, dll)
+    match_jenis = re.search(r"tindak pidana\s*([^\n,\.]*)", teks, re.IGNORECASE)
+    hasil["Jenis Perkara"] = match_jenis.group(1).strip() if match_jenis else "Tidak ditemukan"
 
-    match_instansi = re.search(r"(?:dari satuan kerja|instansi|unit kerja)\s*[:\-]?\s*(.*)", teks, re.IGNORECASE)
-    if match_instansi:
-        hasil["instansi"] = match_instansi.group(1).strip()
+    # Uraian Perkara (paragraf setelah kata "telah terjadi" atau "perkara tersebut")
+    match_uraian = re.search(r"(?:uraian singkat|telah terjadi|perkara tersebut|melakukan penyidikan)[^\n:]*[:\-]?\s*(.{30,500})", teks, re.IGNORECASE)
+    hasil["Uraian Perkara"] = match_uraian.group(1).strip() if match_uraian else "Tidak ditemukan"
+
+    # Keterangan Saksi
+    match_saksi = re.search(r"keterangan saksi|nama/alias[^\n:]*[:\-]?\s*(.{30,500})", teks, re.IGNORECASE)
+    hasil["Keterangan Saksi"] = match_saksi.group(1).strip() if match_saksi else "Tidak ditemukan"
+
+    # Barang Bukti (pola umum: “barang bukti berupa ...” atau setelah kata itu)
+    match_bb = re.search(r"barang bukti[^\n:]*[:\-]?\s*(.{20,300})", teks, re.IGNORECASE)
+    hasil["Barang Bukti"] = match_bb.group(1).strip() if match_bb else "Tidak ditemukan"
+
+    # Profile Penyidik (nama penyidik biasanya sebelum tanda tangan, atau ditulis di akhir)
+    match_penyidik = re.search(r"(AIPTU|BRIPKA|IPTU|AKP|Kompol|diperintahkan kepada)\s+[A-Z ]+", teks)
+    hasil["Profile Penyidik"] = match_penyidik.group(0).strip() if match_penyidik else "Tidak ditemukan"
 
     return hasil
 
+
 entitas = ekstrak_entitas(all_text)
 
-# Simpan hasil entitas ke file
 with open("entitas_ekstrak.json", "w", encoding="utf-8") as f_ent:
     json.dump(entitas, f_ent, ensure_ascii=False, indent=2)
+
+# Cetak hasil
+print(json.dumps(entitas, ensure_ascii=False, indent=2))
 
 # ======== OUTPUT ========
 print("✅ OCR selesai.")
